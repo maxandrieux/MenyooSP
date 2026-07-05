@@ -75,6 +75,7 @@
 #include "..\Submenus\Spooner\SpoonerEntity.h"
 #include "..\Submenus\Spooner\EntityManagement.h"
 #include "..\Submenus\CutscenePlayer.h"
+#include "..\Submenus\Bodyguards\BodyguardTick.h"
 
 #include <Windows.h>
 #include <thread>
@@ -3967,6 +3968,8 @@ void ThreadMenuLoops2()
 		VehicleMaxSpeedMultiplier();
 
 		FlameThrower::Tick();
+
+		sub::BodyguardMenu::TickBodyguards();
 
 		if (sub::TVChannelStuff::loopBasicTV)
 		{

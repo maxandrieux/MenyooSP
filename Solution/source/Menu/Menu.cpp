@@ -176,7 +176,7 @@ UINT8 Menu::breakscroll = 0;
 INT16 Menu::currentArrayIndex = 0;
 INT Menu::currentArray[100] = {};
 INT Menu::currentop_ar[100] = {};
-INT Menu::SetSub_delayed = 0;
+INT Menu::SetSub_delayed = -1;
 int Menu::delayedTimer = 0;
 bool Menu::bitController = 0, Menu::bit_mouse = 0;
 bool Menu::bit_centre_title = 1, Menu::bit_centre_options = 0, Menu::bit_centre_breaks = 1,

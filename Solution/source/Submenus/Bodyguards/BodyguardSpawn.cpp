@@ -7,6 +7,7 @@
 #include "BodyguardManagement.h"
 
 #include "../../Menu/Menu.h"
+#include "../../Menu/Language.h"
 #include "../../Scripting/Game.h"
 #include "../../Scripting/GTAped.h"
 #include "../../Scripting/Model.h"
@@ -24,6 +25,7 @@
 #include "../../Util/StringManip.h"
 #include "../../Submenus/Spooner/EntityManagement.h"
 #include "BodyguardMenu.h"
+#include "BodyguardEscort.h"
 
 namespace sub::BodyguardMenu
 {
@@ -59,27 +61,23 @@ namespace sub::BodyguardMenu
 namespace sub::BodyguardMenu::BodyguardManagement
 {
 	std::vector<Ped> s_bodyguards;
-	void AddOptionBodyGuardPed(const std::string& text, const GTAmodel::Model& model)
+
+	Ped SpawnBodyguardPed(const GTAmodel::Model& model, const std::string& text, BodyguardRole role, bool deferConvoyAssign)
 	{
-		bool bPressed = false;
-		AddOption(text, bPressed);
-
-		if (!bPressed) return;
-
 		if (sub::BodyguardMenu::BodyguardDb.size() >= MAX_BODYGUARDS)
 		{
-			Game::Print::PrintBottomLeft("Maximum of 7 bodyguards reached.");
-			return;
+			Game::Print::PrintBottomLeft(Language::TranslateToSelected("Maximum number of bodyguards reached") + " (" + std::to_string(MAX_BODYGUARDS) + ")");
+			return 0;
 		}
 
 		if (!model.IsInCdImage())
-			return;
+			return 0;
 
 		if (!model.Load(4000))
 		{
-			Game::Print::PrintBottomLeft("Failed to load model.");
+			Game::Print::PrintBottomLeft("Could not load model.");
 			model.Unload();
-			return;
+			return 0;
 		}
 
 		int pedType = 26;
@@ -105,28 +103,50 @@ namespace sub::BodyguardMenu::BodyguardManagement
 
 
 		PED::SET_PED_AS_GROUP_MEMBER(ped, PLAYER::GET_PLAYER_GROUP(PLAYER::PLAYER_ID()));
+		PED::SET_PED_RELATIONSHIP_GROUP_HASH(ped, GET_HASH_KEY("PLAYER"));
 		PED::SET_PED_NEVER_LEAVES_GROUP(ped, true);
 		PED::SET_PED_COMBAT_ABILITY(ped, 2);
 		PED::SET_PED_COMBAT_MOVEMENT(ped, 2);
 		PED::SET_PED_COMBAT_ATTRIBUTES(ped, 46, true);
+		// Role weapon/accuracy/combat tuning first; auto-arm (if enabled) intentionally
+		// overrides the role weapon afterwards.
+		sub::BodyguardMenu::ApplyRoleToBodyguard(ped, role);
+		sub::BodyguardMenu::ApplyAutoArmOnSpawn(ped);
 
 		BodyguardEntity ent{};
 		ent.Handle = GTAentity(ped);
 		ent.Type = EntityType::PED;
 		ent.Name = text;
 		ent.HashName = IntToHexString(model.hash, true);
+		ent.Role = role;
 
 		sub::BodyguardMenu::BodyguardManagement::AddBodyguardToDb(ent);
-		for (auto& bg : sub::BodyguardMenu::BodyguardDb)
-		{
-			if (bg.Handle.Exists())
-				ApplyBodyguardBlip(bg.Handle.GetHandle(), sub::BodyguardMenu::blipIcon);
-		}
-
 		s_bodyguards.push_back(ped);
 
+		sub::BodyguardMenu::ApplyBodyguardBlipForRole(ped, role);
+
 		Game::Print::PrintBottomLeft("Bodyguard spawned");
+		sub::BodyguardMenu::BodyguardManagement::DbgLogSquadState("SPAWN ped=" + std::to_string(ped));
+		if (!deferConvoyAssign && sub::BodyguardMenu::g_escortAutoAssignNewSpawns && sub::BodyguardMenu::HasActiveEscortConvoy())
+			sub::BodyguardMenu::AssignBodyguardsToEscort();
 		model.Unload();
+		return ped;
+	}
+
+	void AddOptionBodyGuardPed(const std::string& text, const GTAmodel::Model& model)
+	{
+		bool bPressed = false;
+		AddOption(text, bPressed);
+
+		if (!bPressed) return;
+
+		if (sub::BodyguardMenu::BodyguardDb.size() >= MAX_BODYGUARDS)
+		{
+			Game::Print::PrintBottomLeft(Language::TranslateToSelected("Maximum number of bodyguards reached") + " (" + std::to_string(MAX_BODYGUARDS) + ")");
+			return;
+		}
+
+		SpawnBodyguardPed(model, text, sub::BodyguardMenu::g_defaultSpawnRole);
 	}
 
 }

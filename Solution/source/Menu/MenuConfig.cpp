@@ -36,6 +36,7 @@
 #include "..\Misc\VehicleFly.h"
 #include "..\Submenus\TimeOptions.h"
 #include "..\Submenus\VehicleOptions.h"
+#include "..\Submenus\Bodyguards\BodyguardConfig.h"
 
 #include <Windows.h>
 #include <simpleini\SimpleIni.h>
@@ -334,6 +335,8 @@ void MenuConfig::ConfigRead()
     FreeCam::maxSpeed = (float)ini.GetDoubleValue(section_freecam.c_str(), "max_speed", FreeCam::maxSpeed);
     FreeCam::minFov = (float)ini.GetDoubleValue(section_freecam.c_str(), "min_fov", FreeCam::minFov);
     FreeCam::maxFov = (float)ini.GetDoubleValue(section_freecam.c_str(), "max_fov", FreeCam::maxFov);
+
+	sub::BodyguardMenu::ReadBodyguardConfig(MenuConfig::iniFile);
 }
 
 void MenuConfig::SaveConfig()
@@ -593,6 +596,8 @@ void MenuConfig::SaveConfig()
     ini.SetDoubleValue(section_freecam.c_str(), "max_speed", FreeCam::maxSpeed);
     ini.SetDoubleValue(section_freecam.c_str(), "min_fov", FreeCam::minFov);
     ini.SetDoubleValue(section_freecam.c_str(), "max_fov", FreeCam::maxFov);
+
+	sub::BodyguardMenu::SaveBodyguardConfig(MenuConfig::iniFile);
 
 	ini.SaveFile((GetPathffA(Pathff::Main, true) + "menyooConfig.ini").c_str());
 }

@@ -115,6 +115,7 @@ namespace sub
 		AddToggle("Fly Auto", supermanAuto, supermanAutoOn);
 		AddToggle("Ignored By Everyone", ignoredByEveryone, null, ignoredByEveryoneOff);
 		AddNumber("Wanted Level", wantedLevel, 0, null, wantedPlus, wantedMinus);
+		AddOption("Wanted Options", null, nullFunc, SUB::BODYGUARD_WANTED);
 		if (wantedLevel > 0)
 		{
 			AddLocal("Freeze Wanted Level", selfFreezeWantedLevel, wantedFreezeOn, wantedFreezeOff);

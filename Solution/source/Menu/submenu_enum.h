@@ -192,7 +192,7 @@ namespace SUB {
 		MAPMODS,
 		MAPMODS2,
 
-		BODYGUARDOPS,
+		BODYGUARDOPS,        // unused, kept for stability (never reorder)
 
 		VOICECHANGER,
 		SPEECHPLAYER,
@@ -283,14 +283,24 @@ namespace SUB {
 		SPSTATMANAGER_INCHAR,
 		SPSTATMANAGER_INCHAR_INLIST,
 
-		MAX_SUBS,
-		BODYGUARD_MAIN,
+		BODYGUARD_MAIN,      // unused, kept for stability (never reorder)
 		BODYGUARDMAINMENU,
 		BODYGUARD_SPAWN,
 		BODYGUARD_LIST,
 		BODYGUARD_SETTINGS,
 		BODYGUARD_ENTITYOPS,
 		BODYGUARD_WEAPONOPS,
-		BODYGUARD_WARDROBE
+		BODYGUARD_WARDROBE,  // unused, kept for stability (never reorder)
+		BODYGUARD_SQUAD_TOOLS,
+		BODYGUARD_SQUAD_MAINTENANCE, // unused, kept for stability (never reorder)
+		BODYGUARD_MANAGE_SQUAD,      // unused, kept for stability (never reorder)
+		BODYGUARD_SQUAD_PRESETS,     // unused, kept for stability (never reorder)
+		BODYGUARD_ESCORT,
+		BODYGUARD_WANTED,
+		BODYGUARD_SQUADS,
+		BODYGUARD_SQUAD_EDIT,
+		BODYGUARD_SQUAD_MEMBER_EDIT,
+		BODYGUARD_CHAUFFEUR,
+		MAX_SUBS
 	};
 }

@@ -7,6 +7,7 @@
 #include "../../Submenus/PedAnimation.h"
 #include "../../Submenus/PedModelChanger.h"
 #include "../../Submenus/PedSpeech.h"
+#include "../../Menu/Language.h"
 
 #include <functional>
 #include "../../Menu/Routine.h"
@@ -24,6 +25,15 @@
 #include "BodyguardSpawn.h"
 
 #include "../../Scripting/GTAblip.h"
+#include "../../Scripting/GTAped.h"
+#include "../../Scripting/enums.h"
+#include "../../Natives/natives.h"
+#include "BodyguardSettings.h"
+#include "BodyguardEscort.h"
+#include "BodyguardCombat.h"
+#include "BodyguardChauffeur.h"
+#include "BodyguardTick.h"
+#include "BodyguardDebug.h"
 using namespace sub::BodyguardMenu;
 
 namespace sub::BodyguardMenu
@@ -32,9 +42,25 @@ namespace sub::BodyguardMenu
     int health = 200;
     bool godmode = true;
     int blipIcon = 1; // 1 = Standard, 280 = Friend, 480 = VIP
+
+    int  g_armWeaponIndex = 0;
+    bool g_autoArmNewBodyguards = false;
+    int  g_spawnWeaponIndex = 0;
+    int  g_presetIndex = 0;
+    bool g_presetApplyCurrent = true;
+    bool g_presetUseForNew = false;
+
+    // v2 role state (single definition TU: BodyguardMenu.cpp).
+    BodyguardRole g_defaultSpawnRole = BodyguardRole::Rifleman;
+    bool g_roleBlipsEnabled = true;
 }
 
 static constexpr int BLIP_COLOUR_BLUELIGHT = 3;
+static constexpr int BG_COMBAT_ATTR_CAN_USE_COVER = 0;
+static constexpr int BG_COMBAT_ATTR_CAN_USE_VEHICLES = 1;
+static constexpr int BG_COMBAT_ATTR_CAN_DO_DRIVEBYS = 2;
+static constexpr int BG_COMBAT_ATTR_CAN_FIGHT_ARMED_WHEN_NOT_ARMED = 5;
+static constexpr int BG_COMBAT_ATTR_ALWAYS_FIGHT = 46;
 
 void sub::BodyguardMenu::RemoveBodyguardBlip(Ped ped)
 {
@@ -67,6 +93,68 @@ void sub::BodyguardMenu::ApplyBodyguardBlip(Ped ped, int icon)
     SET_BLIP_AS_FRIENDLY(blip, true);
 }
 
+// Internal: apply a blip with an explicit sprite + colour (used by the role blips).
+static void ApplyBodyguardBlipSpriteColour(Ped ped, int sprite, int colour)
+{
+    if (!ped || !ENTITY::DOES_ENTITY_EXIST(ped))
+        return;
+
+    sub::BodyguardMenu::RemoveBodyguardBlip(ped);
+
+    Blip blip = ADD_BLIP_FOR_ENTITY(ped);
+    if (!blip)
+        return;
+
+    SET_BLIP_SPRITE(blip, sprite);
+    SET_BLIP_SCALE(blip, 0.80f);
+    SET_BLIP_COLOUR(blip, colour);
+    SET_BLIP_AS_FRIENDLY(blip, true);
+}
+
+void sub::BodyguardMenu::ApplyRoleToBodyguard(Ped ped, BodyguardRole role)
+{
+    if (!ped || !ENTITY::DOES_ENTITY_EXIST(ped))
+        return;
+
+    const BodyguardRoleDef& def = RoleDef(role);
+    GTAped gp(ped);
+    gp.SetWeapon(def.defaultWeapon);
+    gp.SetAccuracy(def.accuracy);
+    PED::SET_PED_SHOOT_RATE(ped, def.shootRate);
+    PED::SET_PED_COMBAT_ABILITY(ped, def.combatAbility);
+    PED::SET_PED_COMBAT_RANGE(ped, def.combatRange);
+    PED::SET_PED_COMBAT_MOVEMENT(ped, role == BodyguardRole::Sniper ? 1 : 2);
+    PED::SET_PED_COMBAT_ATTRIBUTES(ped, BG_COMBAT_ATTR_CAN_USE_COVER, true);
+    PED::SET_PED_COMBAT_ATTRIBUTES(ped, BG_COMBAT_ATTR_CAN_USE_VEHICLES, true);
+    PED::SET_PED_COMBAT_ATTRIBUTES(ped, BG_COMBAT_ATTR_CAN_DO_DRIVEBYS, true);
+    PED::SET_PED_COMBAT_ATTRIBUTES(ped, BG_COMBAT_ATTR_CAN_FIGHT_ARMED_WHEN_NOT_ARMED, true);
+    PED::SET_PED_COMBAT_ATTRIBUTES(ped, BG_COMBAT_ATTR_ALWAYS_FIGHT, true);
+    PED::SET_PED_FIRING_PATTERN(ped, def.firingPattern);
+    PED::SET_PED_HIGHLY_PERCEPTIVE(ped, true);
+    PED::SET_PED_SEEING_RANGE(ped, 120.0f);
+    PED::SET_PED_HEARING_RANGE(ped, 120.0f);
+    PED::SET_CAN_ATTACK_FRIENDLY(ped, false, false);
+
+    if (role == BodyguardRole::Driver)
+    {
+        PED::SET_DRIVER_ABILITY(ped, 1.0f);
+        PED::SET_DRIVER_AGGRESSIVENESS(ped, 0.55f);
+    }
+}
+
+void sub::BodyguardMenu::ApplyBodyguardBlipForRole(Ped ped, BodyguardRole role)
+{
+    if (g_roleBlipsEnabled)
+    {
+        const BodyguardRoleDef& def = RoleDef(role);
+        ApplyBodyguardBlipSpriteColour(ped, def.blipSprite, def.blipColour);
+    }
+    else
+    {
+        ApplyBodyguardBlip(ped, sub::BodyguardMenu::blipIcon);
+    }
+}
+
 void sub::BodyguardMenu::RefreshAllBodyguardBlips()
 {
     for (unsigned int i = 0; i < sub::BodyguardMenu::BodyguardDb.size(); ++i)
@@ -83,15 +171,14 @@ void sub::BodyguardMenu::RefreshAllBodyguardBlips()
         if (hp <= 0)
             ApplyBodyguardBlip(ped, 274); // dead blip
         else
-            ApplyBodyguardBlip(ped, sub::BodyguardMenu::blipIcon);
+            ApplyBodyguardBlipForRole(ped, bg.Role);
     }
 }
 
 void sub::BodyguardMenu::UpdateBodyguardBlipsOnDeath()
 {
-    for (unsigned int i = 0; i < sub::BodyguardMenu::BodyguardDb.size(); ++i)
+    for (auto& bg : BodyguardDb)
     {
-        auto& bg = sub::BodyguardMenu::BodyguardDb[i];
         if (!bg.Handle.Exists())
             continue;
 
@@ -100,32 +187,331 @@ void sub::BodyguardMenu::UpdateBodyguardBlipsOnDeath()
             continue;
 
         int hp = ENTITY::GET_ENTITY_HEALTH(ped);
+        Blip blip = GET_BLIP_FROM_ENTITY(ped);
+
         if (hp <= 0)
         {
-            Blip blip = GET_BLIP_FROM_ENTITY(ped);
+            // Dead -> show the dead blip (274) if not already shown.
             if (!blip || GET_BLIP_SPRITE(blip) != 274)
-                ApplyBodyguardBlip(ped, 274);
-            RefreshAllBodyguardBlips();
-        }
-    }
-    void sub::BodyguardMenu::RefreshAllBodyguardBlips();
-    {
-        for (auto& bg : BodyguardDb)
-        {
-            if (!bg.Handle.Exists())
-                continue;
-
-            Ped ped = bg.Handle.GetHandle();
-            if (!ped || !ENTITY::DOES_ENTITY_EXIST(ped))
-                continue;
-
-            Blip blip = GET_BLIP_FROM_ENTITY(ped);
-            if (blip)
             {
-                SET_BLIP_SCALE(blip, 0.8f);
-                SET_BLIP_AS_SHORT_RANGE(blip, true);
+                ApplyBodyguardBlip(ped, 274);
+                TryPlayBodyguardSpeech(0, "GENERIC_FRIGHTENED_HIGH");
             }
         }
+        else
+        {
+            // Alive -> restore the role/normal blip if it was showing the dead sprite.
+            if (blip && GET_BLIP_SPRITE(blip) == 274)
+                ApplyBodyguardBlipForRole(ped, bg.Role);
+        }
+    }
+}
+
+namespace
+{
+    struct BgWeapon { const char* label; Hash hash; };
+
+    // Arm-All list (default = Pistol). No "None" entry.
+    const BgWeapon kArmWeapons[] =
+    {
+        { "Pistol",        WEAPON_PISTOL        },
+        { "Combat Pistol", WEAPON_COMBATPISTOL  },
+        { "Micro SMG",     WEAPON_MICROSMG      },
+        { "SMG",           WEAPON_SMG           },
+        { "Carbine Rifle", WEAPON_CARBINERIFLE  },
+        { "Assault Rifle", WEAPON_ASSAULTRIFLE  },
+        { "Pump Shotgun",  WEAPON_PUMPSHOTGUN   },
+        { "Combat MG",     WEAPON_COMBATMG      },
+        { "RPG",           WEAPON_RPG           },
+    };
+    const int kArmWeaponCount = (int)(sizeof(kArmWeapons) / sizeof(kArmWeapons[0]));
+
+    // Spawn list: index 0 = None (no weapon), then the same weapons.
+    const BgWeapon kSpawnWeapons[] =
+    {
+        { "None",          0                    },
+        { "Pistol",        WEAPON_PISTOL        },
+        { "Combat Pistol", WEAPON_COMBATPISTOL  },
+        { "Micro SMG",     WEAPON_MICROSMG      },
+        { "SMG",           WEAPON_SMG           },
+        { "Carbine Rifle", WEAPON_CARBINERIFLE  },
+        { "Assault Rifle", WEAPON_ASSAULTRIFLE  },
+        { "Pump Shotgun",  WEAPON_PUMPSHOTGUN   },
+        { "Combat MG",     WEAPON_COMBATMG      },
+        { "RPG",           WEAPON_RPG           },
+    };
+    const int kSpawnWeaponCount = (int)(sizeof(kSpawnWeapons) / sizeof(kSpawnWeapons[0]));
+
+    struct BgPreset { const char* label; Hash weapon; int health; int armor; bool godmode; int accuracy; };
+    const BgPreset kPresets[] =
+    {
+        { "Police",   WEAPON_COMBATPISTOL, 200, 100, false, 50 },
+        { "Military", WEAPON_CARBINERIFLE, 300, 200, false, 75 },
+        { "Gang",     WEAPON_MICROSMG,     150,   0, false, 35 },
+        { "FIB",      WEAPON_ASSAULTRIFLE, 250, 150, false, 65 },
+        { "Heavy",    WEAPON_COMBATMG,     400, 200, true,  60 },
+    };
+    const int kPresetCount = (int)(sizeof(kPresets) / sizeof(kPresets[0]));
+
+    void GiveWeaponToPed(Ped ped, Hash weapon)
+    {
+        if (weapon == 0) return;
+        GTAped gp(ped);
+        gp.SetWeapon(weapon); // gives and equips
+    }
+
+    int ArmAllAliveBodyguards(Hash weapon)
+    {
+        int n = 0;
+        for (auto& bg : sub::BodyguardMenu::BodyguardDb)
+        {
+            if (!sub::BodyguardMenu::IsBodyguardAlive(bg)) continue;
+            Ped ped = bg.Handle.GetHandle();
+            bg.Handle.RequestControl();
+            GiveWeaponToPed(ped, weapon);
+            ++n;
+        }
+        return n;
+    }
+
+    int HealAllAliveBodyguards()
+    {
+        int n = 0;
+        for (auto& bg : sub::BodyguardMenu::BodyguardDb)
+        {
+            if (!bg.Handle.Exists()) continue;
+            Ped ped = bg.Handle.GetHandle();
+            const bool dying = PED::IS_PED_DEAD_OR_DYING(ped, true) != 0;
+            if (!sub::BodyguardMenu::IsBodyguardAlive(bg) && !dying) continue;
+            bg.Handle.RequestControl();
+            if (dying)
+            {
+                PED::RESURRECT_PED(ped);
+                TASK::CLEAR_PED_TASKS_IMMEDIATELY(ped);
+            }
+            ENTITY::SET_ENTITY_MAX_HEALTH(ped, sub::BodyguardMenu::health);
+            ENTITY::SET_ENTITY_HEALTH(ped, sub::BodyguardMenu::health, 0);
+            ++n;
+        }
+        return n;
+    }
+
+    int RefillArmorAllAliveBodyguards()
+    {
+        int n = 0;
+        for (auto& bg : sub::BodyguardMenu::BodyguardDb)
+        {
+            if (!sub::BodyguardMenu::IsBodyguardAlive(bg)) continue;
+            Ped ped = bg.Handle.GetHandle();
+            bg.Handle.RequestControl();
+            PED::SET_PED_ARMOUR(ped, sub::BodyguardMenu::armor);
+            ++n;
+        }
+        return n;
+    }
+
+}
+
+bool sub::BodyguardMenu::ReviveOneBodyguard(BodyguardEntity& bg)
+{
+    if (!bg.Handle.Exists())
+        return false;
+
+    Ped ped = bg.Handle.GetHandle();
+    bg.Handle.RequestControl();
+    PED::RESURRECT_PED(ped);
+    TASK::CLEAR_PED_TASKS_IMMEDIATELY(ped);
+    ENTITY::SET_ENTITY_MAX_HEALTH(ped, sub::BodyguardMenu::health);
+    ENTITY::SET_ENTITY_HEALTH(ped, sub::BodyguardMenu::health, 0);
+    PED::SET_PED_ARMOUR(ped, sub::BodyguardMenu::armor);
+    if (sub::BodyguardMenu::godmode) SetPedInvincibleOn(ped);
+    else SetPedInvincibleOff(ped);
+    PED::SET_PED_AS_GROUP_MEMBER(ped, PLAYER::GET_PLAYER_GROUP(PLAYER::PLAYER_ID()));
+    PED::SET_PED_NEVER_LEAVES_GROUP(ped, true);
+    bg.RemovedFromGroup = false;
+    bg.HoldPosition = false;
+    sub::BodyguardMenu::ApplyRoleToBodyguard(ped, bg.Role);
+    sub::BodyguardMenu::ApplyBodyguardBlipForRole(ped, bg.Role);
+    return true;
+}
+
+namespace
+{
+    int ReviveAllDeadBodyguards(int& missing)
+    {
+        int n = 0;
+        missing = 0;
+        for (auto& bg : sub::BodyguardMenu::BodyguardDb)
+        {
+            if (!bg.Handle.Exists())
+            {
+                ++missing;
+                continue;
+            }
+
+            Ped ped = bg.Handle.GetHandle();
+            const bool needsRevive = !IsBodyguardAlive(bg) || PED::IS_PED_DEAD_OR_DYING(ped, true);
+            if (!needsRevive)
+                continue;
+
+            if (sub::BodyguardMenu::ReviveOneBodyguard(bg))
+                ++n;
+        }
+        return n;
+    }
+
+    int ApplyPresetToCurrentSquad(const BgPreset& p)
+    {
+        int n = 0;
+        for (auto& bg : sub::BodyguardMenu::BodyguardDb)
+        {
+            if (!sub::BodyguardMenu::IsBodyguardAlive(bg)) continue;
+            Ped ped = bg.Handle.GetHandle();
+            bg.Handle.RequestControl();
+            ENTITY::SET_ENTITY_MAX_HEALTH(ped, p.health);
+            ENTITY::SET_ENTITY_HEALTH(ped, p.health, 0);
+            PED::SET_PED_ARMOUR(ped, p.armor);
+            if (p.godmode) SetPedInvincibleOn(ped);
+            else           SetPedInvincibleOff(ped);
+            GTAped gp(ped);
+            gp.SetAccuracy(p.accuracy);
+            gp.SetWeapon(p.weapon);
+            ++n;
+        }
+        return n;
+    }
+}
+
+void sub::BodyguardMenu::ApplyAutoArmOnSpawn(Ped ped)
+{
+    if (!g_autoArmNewBodyguards) return;
+    if (g_spawnWeaponIndex <= 0 || g_spawnWeaponIndex >= kSpawnWeaponCount) return;
+    GiveWeaponToPed(ped, kSpawnWeapons[g_spawnWeaponIndex].hash);
+    dbg::Log(std::string("AUTOARM ped=") + std::to_string(ped) + " weapon=" + kSpawnWeapons[g_spawnWeaponIndex].label);
+}
+
+// Spawn-arming defaults (auto-arm + spawn weapon). Rendered inside the Settings
+// submenu ("Spawn Defaults" section) so every future-spawn option lives in one place;
+// the weapon tables stay private to this TU.
+void sub::BodyguardMenu::AddSpawnArmingOptions()
+{
+    AddToggle("Auto-Arm New Bodyguards (overrides role weapon)", g_autoArmNewBodyguards);
+
+    if (g_spawnWeaponIndex < 0 || g_spawnWeaponIndex >= kSpawnWeaponCount) g_spawnWeaponIndex = 0;
+    bool sInput = false, sPlus = false, sMinus = false;
+    AddTexter("Spawn Weapon", 0, { kSpawnWeapons[g_spawnWeaponIndex].label }, sInput, sPlus, sMinus);
+    if (sPlus)  g_spawnWeaponIndex = (g_spawnWeaponIndex + 1) % kSpawnWeaponCount;
+    if (sMinus) g_spawnWeaponIndex = (g_spawnWeaponIndex == 0 ? kSpawnWeaponCount - 1 : g_spawnWeaponIndex - 1);
+}
+
+void sub::BodyguardMenu::BodyguardSquadTools()
+{
+    AddTitle("Active Bodyguards");
+
+    AddBreak("--- Weapons ---");
+
+    if (g_armWeaponIndex < 0 || g_armWeaponIndex >= kArmWeaponCount) g_armWeaponIndex = 0;
+
+    bool wInput = false, wPlus = false, wMinus = false;
+    AddTexter("Weapon", 0, { kArmWeapons[g_armWeaponIndex].label }, wInput, wPlus, wMinus);
+    if (wPlus)  g_armWeaponIndex = (g_armWeaponIndex + 1) % kArmWeaponCount;
+    if (wMinus) g_armWeaponIndex = (g_armWeaponIndex == 0 ? kArmWeaponCount - 1 : g_armWeaponIndex - 1);
+
+    bool bArm = false;
+    AddOption("Arm All Bodyguards", bArm);
+    if (bArm)
+    {
+        int n = ArmAllAliveBodyguards(kArmWeapons[g_armWeaponIndex].hash);
+        Game::Print::PrintBottomLeft(Language::TranslateToSelected("Bodyguards armed: ") + std::to_string(n));
+        sub::BodyguardMenu::BodyguardManagement::DbgLogSquadState(std::string("ARM_ALL weapon=") + kArmWeapons[g_armWeaponIndex].label + " affected=" + std::to_string(n));
+    }
+
+    AddBreak("--- Health ---");
+
+    bool bHeal = false;
+    AddOption("Heal All Bodyguards", bHeal);
+    if (bHeal)
+    {
+        int n = HealAllAliveBodyguards();
+        Game::Print::PrintBottomLeft(Language::TranslateToSelected("Bodyguards healed: ") + std::to_string(n));
+        sub::BodyguardMenu::BodyguardManagement::DbgLogSquadState("HEAL_ALL affected=" + std::to_string(n));
+    }
+
+    bool bRefill = false;
+    AddOption("Refill Armor All Bodyguards", bRefill);
+    if (bRefill)
+    {
+        int n = RefillArmorAllAliveBodyguards();
+        Game::Print::PrintBottomLeft(Language::TranslateToSelected("Armor refilled: ") + std::to_string(n));
+        sub::BodyguardMenu::BodyguardManagement::DbgLogSquadState("REFILL_ARMOR affected=" + std::to_string(n));
+    }
+
+    bool bRevive = false;
+    AddOption("Revive Dead", bRevive);
+    if (bRevive)
+    {
+        int missing = 0;
+        int n = ReviveAllDeadBodyguards(missing);
+        std::string msg = Language::TranslateToSelected("Bodyguards revived: ") + std::to_string(n);
+        if (missing > 0)
+            msg += " ~o~(" + std::to_string(missing) + Language::TranslateToSelected(" bodies missing") + ")";
+        Game::Print::PrintBottomLeft(msg);
+        sub::BodyguardMenu::BodyguardManagement::DbgLogSquadState("REVIVE_DEAD affected=" + std::to_string(n) + " missing=" + std::to_string(missing));
+    }
+
+    AddBreak("--- Stat Presets ---");
+
+    if (g_presetIndex < 0 || g_presetIndex >= kPresetCount) g_presetIndex = 0;
+
+    bool pInput = false, pPlus = false, pMinus = false;
+    AddTexter("Preset", 0, { kPresets[g_presetIndex].label }, pInput, pPlus, pMinus);
+    if (pPlus)  g_presetIndex = (g_presetIndex + 1) % kPresetCount;
+    if (pMinus) g_presetIndex = (g_presetIndex == 0 ? kPresetCount - 1 : g_presetIndex - 1);
+
+    AddToggle("Apply To Current Squad", g_presetApplyCurrent);
+    AddToggle("Use For New Bodyguards", g_presetUseForNew);
+
+    bool bApply = false;
+    AddOption("Apply Preset", bApply);
+    if (bApply)
+    {
+        const BgPreset& p = kPresets[g_presetIndex];
+        int n = 0;
+        if (g_presetApplyCurrent)
+            n = ApplyPresetToCurrentSquad(p);
+
+        if (g_presetUseForNew)
+        {
+            // Stats only. Spawn arming (auto-arm + weapon) is configured exclusively
+            // in Settings > Spawn Defaults — a preset must never toggle it silently.
+            sub::BodyguardMenu::health  = p.health;
+            sub::BodyguardMenu::armor   = p.armor;
+            sub::BodyguardMenu::godmode = p.godmode;
+        }
+
+        Game::Print::PrintBottomLeft(Language::TranslateToSelected("Preset '") + Language::TranslateToSelected(p.label) + Language::TranslateToSelected("' applied: ") + std::to_string(n));
+        sub::BodyguardMenu::BodyguardManagement::DbgLogSquadState(std::string("PRESET name=") + p.label
+            + " applyCur=" + (g_presetApplyCurrent ? "1" : "0")
+            + " useNew=" + (g_presetUseForNew ? "1" : "0")
+            + " affected=" + std::to_string(n));
+    }
+
+    AddBreak("--- Cleanup ---");
+
+    bool bCleanup = false;
+    AddOption("Cleanup Dead Bodyguards", bCleanup);
+    if (bCleanup)
+    {
+        int n = sub::BodyguardMenu::BodyguardManagement::CleanupDeadBodyguards();
+        Game::Print::PrintBottomLeft(Language::TranslateToSelected("Dead or missing bodyguards removed: ") + std::to_string(n));
+    }
+
+    bool bDismiss = false;
+    AddOption("Dismiss All Bodyguards", bDismiss);
+    if (bDismiss)
+    {
+        sub::BodyguardMenu::BodyguardManagement::DismissAllBodyguards();
+        Game::Print::PrintBottomLeft("All bodyguards dismissed.");
     }
 }
 
@@ -133,106 +519,56 @@ namespace sub
 {
     void BodyguardMainMenu()
     {
-        bool bHealth_plus = false, bHealth_minus = false, bHealth_input = false;
-        bool bArmor_plus = false, bArmor_minus = false, bArmor_input = false;
-        int blipIndex = 0;
-        static const std::vector<std::pair<int, std::string>> blipOptions =
-        {
-            { 1,   "Standard" },
-            { 280, "Friend"   },
-            { 480, "VIP"      }
-        };
-        bool bBlipInput = false;
-        bool icon_plus = false, icon_minus = false;
-        bool oldGodmode = sub::BodyguardMenu::godmode;
-
-        int formationIndex = 0;
-        static const std::vector<std::pair<int, std::string>> formationOptions =
-        {
-            { 0, "Default Formation" },
-            { 1, "Circle (Inward)" },
-            { 2, "Circle (North)" },
-            { 3, "Line" }
-        };
-
-        bool bFormationInput = false;
-        bool form_plus = false, form_minus = false;
         bool bTeleportBodyguards = false;
 
         AddTitle("Bodyguards");
 
         AddOption("Spawn Bodyguard", null, nullFunc, SUB::BODYGUARD_SPAWN);
         AddOption("Bodyguard List", null, nullFunc, SUB::BODYGUARD_LIST);
+        AddOption("Active Bodyguards", null, nullFunc, SUB::BODYGUARD_SQUAD_TOOLS);
+        AddOption("Squads", null, nullFunc, SUB::BODYGUARD_SQUADS);
+        AddOption("Escort Vehicle", null, nullFunc, SUB::BODYGUARD_ESCORT);
+        AddOption("Chauffeur", null, nullFunc, SUB::BODYGUARD_CHAUFFEUR);
+        AddOption("Settings", null, nullFunc, SUB::BODYGUARD_SETTINGS);
 
-        AddNumber("Default Health", sub::BodyguardMenu::health, 0, bHealth_input, bHealth_plus, bHealth_minus);
-        if (bHealth_plus && sub::BodyguardMenu::health < INT_MAX) ++sub::BodyguardMenu::health;
-        if (bHealth_minus && sub::BodyguardMenu::health > 0) --sub::BodyguardMenu::health;
-        if (bHealth_input)
+        AddBreak("--- Actions ---");
+        bool bAttack = false;
+        AddOption("Attack My Target", bAttack);
+        if (bAttack)
         {
-            std::string inputStr = Game::InputBox("", 5U, "", std::to_string(sub::BodyguardMenu::health));
-            if (!inputStr.empty())
-            {
-                try { sub::BodyguardMenu::health = std::stoi(inputStr); }
-                catch (...) { Game::Print::PrintErrorInvalidInput(inputStr); }
-            }
-        }
-
-        AddNumber("Default Armor", sub::BodyguardMenu::armor, 0, bArmor_input, bArmor_plus, bArmor_minus);
-        if (bArmor_plus && sub::BodyguardMenu::armor < INT_MAX) ++sub::BodyguardMenu::armor;
-        if (bArmor_minus && sub::BodyguardMenu::armor > 0) --sub::BodyguardMenu::armor;
-        if (bArmor_input)
-        {
-            std::string inputStr = Game::InputBox("", 5U, "", std::to_string(sub::BodyguardMenu::armor));
-            if (!inputStr.empty())
-            {
-                try { sub::BodyguardMenu::armor = std::stoi(inputStr); }
-                catch (...) { Game::Print::PrintErrorInvalidInput(inputStr); }
-            }
-        }
-
-        AddToggle("Godmode", sub::BodyguardMenu::godmode);
-
-        if (oldGodmode != sub::BodyguardMenu::godmode)
-        {
-            for (unsigned int i = 0; i < sub::BodyguardMenu::BodyguardDb.size(); ++i)
-            {
-                auto& bg = sub::BodyguardMenu::BodyguardDb[i];
-                if (!bg.Handle.Exists()) continue;
-
-                Ped ped = bg.Handle.GetHandle();
-                if (sub::BodyguardMenu::godmode) SetPedInvincibleOn(ped);
-                else SetPedInvincibleOff(ped);
-            }
-        }
-
-
-        AddTexter("Bodyguard Blip", 0, { blipOptions[blipIndex].second }, bBlipInput, icon_plus, icon_minus);
-
-        if (icon_plus)
-        {
-            blipIndex = (blipIndex + 1) % blipOptions.size();
-            sub::BodyguardMenu::blipIcon = blipOptions[blipIndex].first;
-            sub::BodyguardMenu::RefreshAllBodyguardBlips();
-        }
-
-        if (icon_minus)
-        {
-            blipIndex = (blipIndex == 0 ? (int)blipOptions.size() - 1 : blipIndex - 1);
-            sub::BodyguardMenu::blipIcon = blipOptions[blipIndex].first;
-            sub::BodyguardMenu::RefreshAllBodyguardBlips();
-        }
-
-        AddTexter("Formation", 0, { formationOptions[formationIndex].second }, bFormationInput, form_plus, form_minus);
-
-        if (form_plus || form_minus)
-        {
-            if (form_plus)
-                formationIndex = (formationIndex + 1) % formationOptions.size();
+            Entity target = sub::BodyguardMenu::ResolvePlayerTargetEntity();
+            if (target == 0)
+                Game::Print::PrintBottomCentre(Language::TranslateToSelected("No target"));
             else
-                formationIndex = (formationIndex == 0 ? (int)formationOptions.size() - 1 : formationIndex - 1);
+            {
+                sub::BodyguardMenu::TaskAllBodyguardsOnTarget(target);
+                sub::BodyguardMenu::TryPlayBodyguardSpeech(0, "GENERIC_YES");
+            }
+        }
 
-            int playerGroup = PLAYER::GET_PLAYER_GROUP(PLAYER::PLAYER_ID());
-            PED::SET_GROUP_FORMATION(playerGroup, formationOptions[formationIndex].first);
+        bool bCease = false;
+        AddOption("Cease Fire", bCease);
+        if (bCease)
+        {
+            sub::BodyguardMenu::CeaseFireAll();
+            sub::BodyguardMenu::TryPlayBodyguardSpeech(0, "GENERIC_YES");
+        }
+
+        bool anyFollowing = false;
+        for (auto& bg : sub::BodyguardMenu::BodyguardDb)
+        {
+            if (sub::BodyguardMenu::IsBodyguardAlive(bg) && !bg.HoldPosition)
+            {
+                anyFollowing = true;
+                break;
+            }
+        }
+        bool bHoldAll = false;
+        AddOption(anyFollowing ? "Hold Positions (All)" : "Follow Me (All)", bHoldAll);
+        if (bHoldAll)
+        {
+            sub::BodyguardMenu::SetAllBodyguardsHoldPosition(anyFollowing);
+            sub::BodyguardMenu::TryPlayBodyguardSpeech(0, "GENERIC_YES");
         }
 
         AddOption("Bring Bodyguards To Self", bTeleportBodyguards);
@@ -285,3 +621,7 @@ namespace sub
 #include "..\..\Menu\submenu_enum.h"
 REGISTER_SUBMENU(BODYGUARDMAINMENU,         sub::BodyguardMainMenu)
 REGISTER_SUBMENU(BODYGUARD_SPAWN,           sub::BodyguardMenu::BodyguardSpawn)
+REGISTER_SUBMENU(BODYGUARD_SQUAD_TOOLS,     sub::BodyguardMenu::BodyguardSquadTools)
+// BODYGUARD_SQUAD_MAINTENANCE / BODYGUARD_MANAGE_SQUAD / BODYGUARD_SQUAD_PRESETS:
+// merged into the "Active Bodyguards" submenu (BODYGUARD_SQUAD_TOOLS, formerly
+// labelled "Squad Tools"); enum ids kept (never reorder), handlers removed.
